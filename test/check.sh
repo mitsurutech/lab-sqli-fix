@@ -39,7 +39,7 @@ for c in $(compose ps -q); do
 done
 NET="${project}_lab" APP="$(compose ps -q app)" bash "$root/test/lab.sh" 1
 echo "- the fix is made inside the running container and the shop is restarted"
-docker exec "$(compose ps -q app)" sh -c 'sed -i -e "s|query = .*|query = \"SELECT name, price FROM products WHERE public = 1 AND name LIKE ?\"|" -e "s|rows = db.execute(query).fetchall()|rows = db.execute(query, (\"%\" + term + \"%\",)).fetchall()|" /tmp/app/app.py'
+docker exec "$(compose ps -q app)" sed -i 's|^    rows = .*|    rows = db.execute("SELECT name, price FROM products WHERE public = 1 AND name LIKE ?", ("%" + term + "%",)).fetchall()|' /tmp/app/app.py
 docker restart "$(compose ps -q app)" >/dev/null
 NET="${project}_lab" APP="$(compose ps -q app)" bash "$root/test/lab.sh" 2
 echo "- the lab is stopped and started again and the fix is still there"
