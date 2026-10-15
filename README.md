@@ -16,7 +16,7 @@ It is one `docker-compose` file, `compose.yaml`, built from a single public Pyth
 | --- | --- | --- | --- |
 | `app` | [`python:3.12.15-alpine`](https://hub.docker.com/_/python) | 96 MB | a shop's search page written with Python's standard library and SQLite |
 
-There is nothing third-party to attack: the shop is about eighty lines written by the compose file's own entrypoint, because a lab is made of images alone and may not mount a file or build one. The program is written into a **named volume** on the first start only, so the fix a student makes is never put back, and it is still there after the lab is stopped and started again. The shop starts in about two seconds and uses about 12 MB when idle.
+There is nothing third-party to attack: the shop is about eighty lines written by the compose file's own entrypoint, because a lab is made of images alone and may not mount a file or build one. The program is written into a **named volume** on the first start only, so the fix a student makes is never put back, and it is still there after the lab is stopped and started again. The shop starts in about four seconds and uses about 12 MB when idle.
 
 The shop has two tables. `products` has five products for sale and two that are not (a staff discount card and an unreleased drone). `users` has two accounts with their passwords, which no search should ever show.
 
