@@ -1,0 +1,151 @@
+# SQL injection: find it and fix it. A small shop search page that is insecure on purpose,
+# and a terminal to attack it, fix its code and prove the fix.
+#
+# Your copy of the shop is the only thing you may attack, and it is the only thing you can
+# reach: this lab has no way out to the internet, so nothing you try can touch anybody
+# else's machine. Never point a tool at a site you do not own, in a lab or anywhere else.
+#
+# The shop is the service called app, on port 8000. From the lab's terminal search it with
+# curl -G --data-urlencode "q=pen" http://app:8000/search, then make the search hand over
+# what it should not (the README and the lesson show how). Fix the code inside the running
+# container: docker exec -it app vi /tmp/app/app.py, then docker restart app. The program
+# docker exec app sh /tmp/app/lab-check says which problems are fixed. Your edits are kept
+# when the lab is stopped and started again, because /tmp, where it lives, is a named volume.
+#
+# Hand in the output of the attack before and after your fix, the output of docker exec app
+# sh /tmp/app/lab-check at the end, and the line you changed with a sentence on why the
+# new one cannot be injected.
+#
+# To start again from the weak code, run docker exec app rm /tmp/app/app.py and then
+# docker restart app.
+
+services:
+  app:
+    image: python:3.12.15-alpine
+    # An unprivileged account: the runner gives it no capabilities at all. The volume is
+    # mounted on /tmp because that is the one folder in the image it may write to.
+    user: "65532"
+    # The program is written on the first start only, so what you change is never put
+    # back. A program that no longer compiles is kept as app.py.broken and the weak one is
+    # written again, or a saved typing mistake would be a lab that cannot start. lab-check
+    # is written on every start and asks the running shop over its own address, so it
+    # reports what the shop does and not what a file says.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        dir=/tmp/app
+        mkdir -p $$dir
+        weak() {
+          cat > $$dir/app.py <<'APP'
+        # A shop's product search, written to be attacked. Find what is wrong with search()
+        # and fix it, then run docker restart app.
+        import http.server
+        import sqlite3
+        import urllib.parse
+
+        DB = "/tmp/app/shop.db"
+
+
+        def setup():
+            db = sqlite3.connect(DB)
+            db.execute("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, public INTEGER)")
+            db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, password TEXT)")
+            if db.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
+                db.executemany("INSERT INTO products (name, price, public) VALUES (?, ?, ?)", [
+                    ("Notebook", 3.50, 1), ("Pen", 1.20, 1), ("Mug", 6.00, 1),
+                    ("Baker's apron", 14.00, 1), ("Desk lamp", 18.00, 1),
+                    ("Staff discount card", 0.00, 0), ("Unreleased drone", 249.00, 0),
+                ])
+                db.executemany("INSERT INTO users (username, password) VALUES (?, ?)", [
+                    ("admin", "hunter2"), ("maria", "summer2024"),
+                ])
+                db.commit()
+            db.close()
+
+
+        def search(term):
+            db = sqlite3.connect(DB)
+            query = "SELECT name, price FROM products WHERE public = 1 AND name LIKE '%" + term + "%'"
+            rows = db.execute(query).fetchall()
+            db.close()
+            return rows
+
+
+        PAGE = """<!doctype html>
+        <title>Corner Shop</title>
+        <h1>Corner Shop</h1>
+        <form action="/search"><input name="q" placeholder="Search products"> <button>Search</button></form>
+        """
+
+
+        class Shop(http.server.BaseHTTPRequestHandler):
+            def reply(self, status, body, kind="text/plain"):
+                data = body.encode()
+                self.send_response(status)
+                self.send_header("Content-Type", kind + "; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                url = urllib.parse.urlparse(self.path)
+                if url.path == "/":
+                    return self.reply(200, PAGE, "text/html")
+                if url.path != "/search":
+                    return self.reply(404, "not found\n")
+                term = urllib.parse.parse_qs(url.query).get("q", [""])[0]
+                try:
+                    rows = search(term)
+                except sqlite3.Error as error:
+                    return self.reply(500, "database error: " + str(error) + "\n")
+                self.reply(200, "".join(name + "  " + str(price) + "\n" for name, price in rows))
+
+            def log_message(self, *args):
+                pass
+
+
+        setup()
+        http.server.ThreadingHTTPServer(("0.0.0.0", 8000), Shop).serve_forever()
+        APP
+        }
+        if [ ! -f $$dir/app.py ]; then
+          weak
+        elif ! python -m py_compile $$dir/app.py 2>/dev/null; then
+          cp $$dir/app.py $$dir/app.py.broken
+          weak
+          echo "app.py did not compile, kept as app.py.broken; the weak one is back"
+        fi
+        cat > $$dir/lab-check <<'CHECK'
+        b=http://127.0.0.1:8000/search?q=
+        bad=0
+        say() { if [ "$$1" = ok ]; then echo "PASS  $$2"; else echo "FAIL  $$2"; bad=1; fi; }
+        ask() { wget -qO- "$$b$$1" 2>/dev/null; }
+        if ask Pen | grep -q '^Pen '; then say ok "a normal search finds the pen"; else say no "a normal search does not find the pen"; fi
+        if ask "Baker's" | grep -q "^Baker's apron "; then say ok "a name with an apostrophe in it is found"; else say no "a name with an apostrophe in it breaks the search"; fi
+        if ask "x'%20OR%201%3D1%20--%20" | grep -q 'Staff discount card'; then say no "an injected OR returns the products that are not for sale"; else say ok "an injected OR returns nothing extra"; fi
+        if ask "x'%20UNION%20SELECT%20username,%20password%20FROM%20users%20--%20" | grep -q 'hunter2'; then say no "an injected UNION returns the users' passwords"; else say ok "an injected UNION returns no passwords"; fi
+        if [ $$bad = 0 ]; then echo "All checks pass."; else echo "Some checks fail."; fi
+        exit $$bad
+        CHECK
+        exec python $$dir/app.py
+    volumes:
+      - sqlifix:/tmp
+    expose: ["8000"]
+    # Healthy means the shop answers, so the first press of Open works. A program saved
+    # with a typing mistake is put right at the start, so this can pass again.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/search?q=Pen"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    deploy:
+      resources:
+        limits:
+          memory: 96M
+    labels:
+      lab.title: The shop's search page
+      lab.open: "8000"
+
+volumes:
+  sqlifix:
